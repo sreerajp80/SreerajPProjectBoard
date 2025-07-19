@@ -6,7 +6,7 @@ enum ActivityStatus { running, paused, finished }
 class Activity {
   final String id;
   final String projectId;
-  final String description;
+  String description; // Changed from final to allow editing
   final DateTime startTime;
   DateTime? endTime;
   int duration; // in seconds
@@ -82,5 +82,10 @@ class Activity {
       createdAt: createdAt ?? this.createdAt,
       status: status ?? this.status,
     );
+  }
+
+  // Method to update description
+  void updateDescription(String newDescription) {
+    description = newDescription;
   }
 }

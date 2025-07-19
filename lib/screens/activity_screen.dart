@@ -16,251 +16,307 @@ class ActivityScreen extends StatefulWidget {
   State<ActivityScreen> createState() => _ActivityScreenState();
 }
 
-class _ActivityScreenState extends State<ActivityScreen> {
-  final TextEditingController _descriptionController = TextEditingController();
+class _ActivityScreenState extends State<ActivityScreen>
+    with WidgetsBindingObserver {
+  final TextEditingController _newActivityController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   Timer? _timer;
-  int _seconds = 0;
-  bool _isRunning = false;
-  Activity? _currentActivity;
 
-  List<Activity> _activities = [];
+  List<Activity> _runningActivities = [];
   List<Activity> _pausedActivities = [];
+  List<Activity> _finishedActivities = [];
   int _totalDuration = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadActivities();
-    _loadActiveActivity();
-    _loadPausedActivities();
+    _startGlobalTimer();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    _newActivityController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // App came back to foreground, recalculate running activities
+        _recalculateRunningActivities();
+        break;
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        // App going to background, save current state
+        _saveRunningActivitiesState();
+        break;
+    }
+  }
+
+  void _recalculateRunningActivities() {
+    // Recalculate durations for all running activities based on actual elapsed time
+    if (_runningActivities.isNotEmpty) {
+      setState(() {
+        for (var activity in _runningActivities) {
+          final now = DateTime.now();
+          final elapsed = now.difference(activity.startTime).inSeconds;
+          activity.duration = elapsed;
+        }
+      });
+    }
+  }
+
+  void _saveRunningActivitiesState() async {
+    // Update running activities in database with current duration
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+
+    for (var activity in _runningActivities) {
+      final now = DateTime.now();
+      final elapsed = now.difference(activity.startTime).inSeconds;
+      activity.duration = elapsed;
+
+      // Save to database
+      await provider.updateActivity(activity);
+    }
   }
 
   void _loadActivities() async {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
-    final activities = await provider.getProjectActivities(widget.project.id);
+    final allActivities = await provider.getProjectActivities(
+      widget.project.id,
+    );
     final totalDuration = await provider.getTotalProjectDuration(
       widget.project.id,
     );
 
     setState(() {
-      _activities = activities.where((a) => a.isFinished).toList();
+      _runningActivities = allActivities.where((a) => a.isRunning).toList();
+      _pausedActivities = allActivities.where((a) => a.isPaused).toList();
+      _finishedActivities = allActivities.where((a) => a.isFinished).toList();
       _totalDuration = totalDuration;
     });
+
+    // Recalculate running activities immediately after loading
+    _recalculateRunningActivities();
   }
 
-  void _loadActiveActivity() async {
-    final provider = Provider.of<ProjectProvider>(context, listen: false);
-    final activeActivity = await provider.getActiveActivity(widget.project.id);
-
-    if (activeActivity != null) {
-      setState(() {
-        _currentActivity = activeActivity;
-        _isRunning = true;
-        _descriptionController.text = activeActivity.description;
-
-        // Calculate elapsed time since activity started
-        final now = DateTime.now();
-        final elapsed = now.difference(activeActivity.startTime).inSeconds;
-        _seconds = elapsed;
-      });
-
-      // Start the timer to continue tracking
-      _startTimer();
-    }
-  }
-
-  void _loadPausedActivities() async {
-    final provider = Provider.of<ProjectProvider>(context, listen: false);
-    final pausedActivities = await provider.getPausedActivities(
-      widget.project.id,
-    );
-
-    setState(() {
-      _pausedActivities = pausedActivities;
+  void _startGlobalTimer() {
+    // Global timer that updates UI every second for all running activities
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_runningActivities.isNotEmpty) {
+        setState(() {
+          final now = DateTime.now();
+          for (var activity in _runningActivities) {
+            // Calculate actual elapsed time from start time to now
+            final elapsed = now.difference(activity.startTime).inSeconds;
+            activity.duration = elapsed;
+          }
+        });
+      }
     });
   }
 
-  void _startTimer() {
-    // Validate description is provided
-    if (_descriptionController.text.trim().isEmpty) {
+  Future<void> _createNewActivity() async {
+    if (_newActivityController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter activity description before starting'),
+          content: Text('Please enter activity description'),
           backgroundColor: Colors.red,
         ),
       );
       return;
     }
 
-    _startTimerExecution();
-  }
+    final now = DateTime.now();
+    final activity = Activity(
+      projectId: widget.project.id,
+      description: _newActivityController.text.trim(),
+      startTime: now,
+      duration: 0,
+      status: ActivityStatus.running,
+    );
 
-  void _startTimerExecution() async {
-    // If no current activity, create a new one
-    if (_currentActivity == null) {
-      final activity = Activity(
-        projectId: widget.project.id,
-        description: _descriptionController.text.trim(),
-        startTime: DateTime.now(),
-        duration: _seconds,
-        status: ActivityStatus.running,
-      );
-
-      final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.addActivity(activity);
-
-      setState(() {
-        _currentActivity = activity;
-      });
-    } else {
-      // Resume existing activity
-      final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.updateActivityStatus(
-        _currentActivity!.id,
-        ActivityStatus.running,
-      );
-
-      setState(() {
-        _currentActivity = _currentActivity!.copyWith(
-          status: ActivityStatus.running,
-        );
-      });
-    }
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+    await provider.addActivity(activity);
 
     setState(() {
-      _isRunning = true;
+      _runningActivities.add(activity);
     });
 
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _seconds++;
-      });
-
-      // Update activity duration in database periodically (every 30 seconds)
-      if (_seconds % 30 == 0 && _currentActivity != null) {
-        _updateActivityDuration();
-      }
-    });
-  }
-
-  Future<void> _pauseTimer() async {
-    _timer?.cancel();
-
-    if (_currentActivity != null) {
-      final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.updateActivityStatus(
-        _currentActivity!.id,
-        ActivityStatus.paused,
-        newDuration: _seconds,
-      );
-
-      setState(() {
-        _currentActivity = _currentActivity!.copyWith(
-          status: ActivityStatus.paused,
-          duration: _seconds,
-        );
-        _isRunning = false;
-      });
-
-      _loadPausedActivities(); // Refresh paused activities list
-    }
-  }
-
-  void _stopTimer() async {
-    _timer?.cancel();
-
-    if (_currentActivity != null) {
-      final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.updateActivityStatus(
-        _currentActivity!.id,
-        ActivityStatus.finished,
-        newDuration: _seconds,
-        endTime: DateTime.now(),
-      );
-    }
-
-    setState(() {
-      _isRunning = false;
-      _currentActivity = null;
-      _seconds = 0;
-    });
-
-    _descriptionController.clear();
-    _loadActivities(); // Refresh finished activities list
-    _loadPausedActivities(); // Refresh paused activities list
+    _newActivityController.clear();
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Activity finished and saved'),
+        content: Text('New activity started'),
         backgroundColor: Colors.green,
       ),
     );
   }
 
-  void _resetTimer() async {
-    _timer?.cancel();
+  Future<void> _pauseActivity(Activity activity) async {
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
 
-    if (_currentActivity != null) {
-      // Delete the current activity if it was just started
-      final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.deleteActivity(_currentActivity!.id);
-    }
+    // Calculate final duration before pausing
+    final now = DateTime.now();
+    final finalDuration = now.difference(activity.startTime).inSeconds;
+
+    await provider.updateActivityStatus(
+      activity.id,
+      ActivityStatus.paused,
+      newDuration: finalDuration,
+    );
 
     setState(() {
-      _isRunning = false;
-      _currentActivity = null;
-      _seconds = 0;
+      _runningActivities.remove(activity);
+      activity.status = ActivityStatus.paused;
+      activity.duration = finalDuration;
+      _pausedActivities.add(activity);
     });
-
-    _descriptionController.clear();
-    _loadActivities();
-    _loadPausedActivities();
   }
 
-  void _resumePausedActivity(Activity activity) async {
-    // Stop current timer if running
-    if (_isRunning) {
-      await _pauseTimer();
-    }
-
+  Future<void> _resumeActivity(Activity activity) async {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
+
+    // Calculate new start time: current time minus already accumulated duration
+    final now = DateTime.now();
+    final newStartTime = now.subtract(Duration(seconds: activity.duration));
+
+    final updatedActivity = activity.copyWith(
+      startTime: newStartTime,
+      status: ActivityStatus.running,
+    );
+
     await provider.updateActivityStatus(activity.id, ActivityStatus.running);
 
     setState(() {
-      _currentActivity = activity.copyWith(status: ActivityStatus.running);
-      _descriptionController.text = activity.description;
-      _seconds = activity.duration;
-      _isRunning = true;
+      _pausedActivities.remove(activity);
+      // Remove old activity and add updated one
+      final index = _runningActivities.indexWhere((a) => a.id == activity.id);
+      if (index != -1) {
+        _runningActivities[index] = updatedActivity;
+      } else {
+        _runningActivities.add(updatedActivity);
+      }
     });
-
-    _startTimerExecution();
-    _loadPausedActivities(); // Refresh paused activities list
   }
 
-  void _deletePausedActivity(Activity activity) async {
+  Future<void> _finishActivity(Activity activity) async {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
-    await provider.deleteActivity(activity.id);
-    _loadPausedActivities();
+
+    // Calculate final duration
+    final now = DateTime.now();
+    final finalDuration = activity.isRunning
+        ? now.difference(activity.startTime).inSeconds
+        : activity.duration;
+
+    await provider.updateActivityStatus(
+      activity.id,
+      ActivityStatus.finished,
+      newDuration: finalDuration,
+      endTime: now,
+    );
+
+    setState(() {
+      if (_runningActivities.contains(activity)) {
+        _runningActivities.remove(activity);
+      } else if (_pausedActivities.contains(activity)) {
+        _pausedActivities.remove(activity);
+      }
+
+      activity.status = ActivityStatus.finished;
+      activity.duration = finalDuration;
+      activity.endTime = now;
+      _finishedActivities.insert(0, activity);
+    });
+
+    _loadActivities(); // Refresh total duration
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Paused activity deleted'),
+        content: Text('Activity finished'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _deleteActivity(Activity activity) async {
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+    await provider.deleteActivity(activity.id);
+
+    setState(() {
+      _runningActivities.remove(activity);
+      _pausedActivities.remove(activity);
+      _finishedActivities.remove(activity);
+    });
+
+    _loadActivities(); // Refresh total duration
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Activity deleted'),
         backgroundColor: Colors.orange,
       ),
     );
   }
 
-  Future<void> _updateActivityDuration() async {
-    if (_currentActivity != null) {
+  Future<void> _editActivityDescription(Activity activity) async {
+    final controller = TextEditingController(text: activity.description);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Activity Description'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Description',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty && result != activity.description) {
+      activity.updateDescription(result);
+
+      // Update in database
       final provider = Provider.of<ProjectProvider>(context, listen: false);
-      await provider.updateActivityStatus(
-        _currentActivity!.id,
-        ActivityStatus.running,
-        newDuration: _seconds,
+      await provider.updateActivityDescription(activity.id, result);
+
+      setState(() {}); // Refresh UI
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Activity description updated'),
+          backgroundColor: Colors.green,
+        ),
       );
     }
+
+    controller.dispose();
   }
 
   String _formatDuration(int seconds) {
@@ -271,6 +327,22 @@ class _ActivityScreenState extends State<ActivityScreen> {
     return '${hours.toString().padLeft(2, '0')}:'
         '${minutes.toString().padLeft(2, '0')}:'
         '${secs.toString().padLeft(2, '0')}';
+  }
+
+  int _getCurrentTotalTime() {
+    // Calculate current running time based on actual elapsed time
+    final now = DateTime.now();
+    int runningTime = _runningActivities.fold(
+      0,
+      (sum, activity) => sum + now.difference(activity.startTime).inSeconds,
+    );
+
+    int pausedTime = _pausedActivities.fold(
+      0,
+      (sum, activity) => sum + activity.duration,
+    );
+
+    return _totalDuration + runningTime + pausedTime;
   }
 
   @override
@@ -305,158 +377,80 @@ class _ActivityScreenState extends State<ActivityScreen> {
         ),
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: Colors.grey.shade700),
-          onPressed: () async {
-            // Save current activity state before leaving
-            if (_isRunning && _currentActivity != null) {
-              await _updateActivityDuration();
-            }
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.refresh, color: Colors.grey.shade700),
+            onPressed: _loadActivities,
+            tooltip: 'Refresh',
+          ),
+        ],
       ),
       body: Column(
         children: [
-          // Timer and Note Section
+          // New Activity Creation Section
           Container(
             color: Colors.white,
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(20),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Timer Display
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        sectionColor.withValues(alpha: 0.1),
-                        sectionColor.withValues(alpha: 0.05),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: sectionColor.withValues(alpha: 0.2),
-                      width: 2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: sectionColor.withValues(alpha: 0.3),
-                        blurRadius: 15,
-                        offset: const Offset(0, 5),
-                      ),
-                      BoxShadow(
-                        color: Colors.white,
-                        blurRadius: 15,
-                        offset: const Offset(0, -5),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        _formatDuration(_seconds),
-                        style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: sectionColor,
-                          fontFamily: 'monospace',
-                          shadows: [
-                            Shadow(
-                              color: sectionColor.withValues(alpha: 0.5),
-                              blurRadius: 8,
-                              offset: const Offset(2, 2),
-                            ),
-                            Shadow(
-                              color: Colors.white,
-                              blurRadius: 8,
-                              offset: const Offset(-1, -1),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _buildIconButton(
-                            icon: _isRunning ? Icons.pause : Icons.play_arrow,
-                            tooltip: _isRunning ? 'Pause' : 'Start',
-                            onPressed: _isRunning ? _pauseTimer : _startTimer,
-                            color: _isRunning ? Colors.orange : sectionColor,
-                          ),
-                          const SizedBox(width: 15),
-                          _buildIconButton(
-                            icon: Icons.stop,
-                            tooltip: 'Finish',
-                            onPressed: _isRunning ? _stopTimer : null,
-                            color: Colors.green,
-                          ),
-                          const SizedBox(width: 15),
-                          _buildIconButton(
-                            icon: Icons.refresh,
-                            tooltip: 'Reset',
-                            onPressed: _resetTimer,
-                            color: Colors.red,
-                          ),
-                        ],
-                      ),
-                    ],
+                Text(
+                  'Start New Activity',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
                   ),
                 ),
-                const SizedBox(height: 20),
-                // Activity Description
-                TextField(
-                  controller: _descriptionController,
-                  maxLines: 3,
-                  enabled: !_isRunning, // Disable editing while running
-                  decoration: InputDecoration(
-                    labelText: 'Activity Description *',
-                    hintText: 'What are you working on?',
-                    filled: true,
-                    fillColor: _isRunning
-                        ? Colors.grey.shade100
-                        : Colors.grey.shade50,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _newActivityController,
+                        decoration: InputDecoration(
+                          hintText: 'What are you working on?',
+                          filled: true,
+                          fillColor: Colors.grey.shade50,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: sectionColor,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                        onSubmitted: (_) => _createNewActivity(),
+                      ),
                     ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: sectionColor, width: 2),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: _createNewActivity,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Start'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: sectionColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
                     ),
-                    suffixIcon: Icon(
-                      Icons.edit,
-                      color: _isRunning ? Colors.grey.shade400 : sectionColor,
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),
           ),
-
-          // Paused Activities Section (if any)
-          if (_pausedActivities.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Paused Activities',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ..._pausedActivities.map(
-                    (activity) => _buildPausedActivityItem(activity),
-                  ),
-                ],
-              ),
-            ),
 
           // Total Duration Card
           Container(
@@ -495,9 +489,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
                       ),
                     ),
                     Text(
-                      _formatDuration(
-                        _totalDuration + (_isRunning ? _seconds : 0),
-                      ),
+                      _formatDuration(_getCurrentTotalTime()),
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -510,141 +502,286 @@ class _ActivityScreenState extends State<ActivityScreen> {
             ),
           ),
 
-          // Activities List Header
-          if (_activities.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Completed Activities',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-              ),
-            ),
-
           // Activities List
           Expanded(
-            child: _activities.isEmpty
-                ? _buildEmptyState()
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 10,
+            child: DefaultTabController(
+              length: 3,
+              child: Column(
+                children: [
+                  TabBar(
+                    labelColor: sectionColor,
+                    unselectedLabelColor: Colors.grey.shade600,
+                    indicatorColor: sectionColor,
+                    tabs: [
+                      Tab(
+                        text: 'Running (${_runningActivities.length})',
+                        icon: const Icon(Icons.play_circle, size: 20),
+                      ),
+                      Tab(
+                        text: 'Paused (${_pausedActivities.length})',
+                        icon: const Icon(Icons.pause_circle, size: 20),
+                      ),
+                      Tab(
+                        text: 'Finished (${_finishedActivities.length})',
+                        icon: const Icon(Icons.check_circle, size: 20),
+                      ),
+                    ],
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _buildRunningActivitiesList(),
+                        _buildPausedActivitiesList(),
+                        _buildFinishedActivitiesList(),
+                      ],
                     ),
-                    itemCount: _activities.length,
-                    itemBuilder: (context, index) {
-                      return _buildActivityItem(_activities[index]);
-                    },
                   ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildIconButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback? onPressed,
-    required Color color,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: onPressed != null
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.4),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: ElevatedButton(
-          onPressed: onPressed,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: onPressed != null ? color : Colors.grey.shade300,
-            foregroundColor: Colors.white,
-            shape: const CircleBorder(),
-            padding: const EdgeInsets.all(16),
-            elevation: 0,
+  Widget _buildRunningActivitiesList() {
+    if (_runningActivities.isEmpty) {
+      return _buildEmptyState(
+        'No running activities',
+        'Start a new activity to begin tracking your work',
+        Icons.play_circle_outline,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(20),
+      itemCount: _runningActivities.length,
+      itemBuilder: (context, index) {
+        return _buildActivityCard(_runningActivities[index], Colors.green, [
+          _buildActionButton(
+            Icons.pause,
+            'Pause',
+            Colors.orange,
+            () => _pauseActivity(_runningActivities[index]),
           ),
-          child: Icon(icon, size: 24),
-        ),
-      ),
+          _buildActionButton(
+            Icons.stop,
+            'Finish',
+            Colors.green,
+            () => _finishActivity(_runningActivities[index]),
+          ),
+          _buildActionButton(
+            Icons.edit,
+            'Edit',
+            Colors.blue,
+            () => _editActivityDescription(_runningActivities[index]),
+          ),
+          _buildActionButton(
+            Icons.delete,
+            'Delete',
+            Colors.red,
+            () => _deleteActivity(_runningActivities[index]),
+          ),
+        ]);
+      },
     );
   }
 
-  Widget _buildPausedActivityItem(Activity activity) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Icon(Icons.pause, color: Colors.orange, size: 16),
+  Widget _buildPausedActivitiesList() {
+    if (_pausedActivities.isEmpty) {
+      return _buildEmptyState(
+        'No paused activities',
+        'Activities you pause will appear here',
+        Icons.pause_circle_outline,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(20),
+      itemCount: _pausedActivities.length,
+      itemBuilder: (context, index) {
+        return _buildActivityCard(_pausedActivities[index], Colors.orange, [
+          _buildActionButton(
+            Icons.play_arrow,
+            'Resume',
+            Colors.green,
+            () => _resumeActivity(_pausedActivities[index]),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  activity.description,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                Text(
-                  _formatDuration(activity.duration),
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                ),
-              ],
-            ),
+          _buildActionButton(
+            Icons.stop,
+            'Finish',
+            Colors.green,
+            () => _finishActivity(_pausedActivities[index]),
           ),
-          IconButton(
-            icon: const Icon(Icons.play_arrow, color: Colors.green),
-            onPressed: () => _resumePausedActivity(activity),
-            tooltip: 'Resume',
+          _buildActionButton(
+            Icons.edit,
+            'Edit',
+            Colors.blue,
+            () => _editActivityDescription(_pausedActivities[index]),
           ),
-          IconButton(
-            icon: const Icon(Icons.delete, color: Colors.red),
-            onPressed: () => _deletePausedActivity(activity),
-            tooltip: 'Delete',
+          _buildActionButton(
+            Icons.delete,
+            'Delete',
+            Colors.red,
+            () => _deleteActivity(_pausedActivities[index]),
           ),
-        ],
-      ),
+        ]);
+      },
     );
   }
 
-  Widget _buildActivityItem(Activity activity) {
+  Widget _buildFinishedActivitiesList() {
+    if (_finishedActivities.isEmpty) {
+      return _buildEmptyState(
+        'No completed activities',
+        'Activities you finish will appear here',
+        Icons.check_circle_outline,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(20),
+      itemCount: _finishedActivities.length,
+      itemBuilder: (context, index) {
+        final activity = _finishedActivities[index];
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.check_circle,
+                  color: Colors.green,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      activity.description,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.grey.shade900,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.access_time,
+                          size: 14,
+                          color: Colors.grey.shade500,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _formatDuration(activity.duration),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Icon(
+                          Icons.calendar_today,
+                          size: 14,
+                          color: Colors.grey.shade500,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          DateFormat(
+                            'MMM d, h:mm a',
+                          ).format(activity.createdAt),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton(
+                icon: Icon(Icons.more_vert, color: Colors.grey.shade600),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: const Row(
+                      children: [
+                        Icon(Icons.edit, size: 18),
+                        SizedBox(width: 8),
+                        Text('Edit Description'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: const Row(
+                      children: [
+                        Icon(Icons.delete, size: 18, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Delete', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
+                  ),
+                ],
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _editActivityDescription(activity);
+                  } else if (value == 'delete') {
+                    _deleteActivity(activity);
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildActivityCard(
+    Activity activity,
+    Color statusColor,
+    List<Widget> actions,
+  ) {
+    // Calculate real-time duration for running activities
+    final displayDuration = activity.isRunning
+        ? DateTime.now().difference(activity.startTime).inSeconds
+        : activity.duration;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: statusColor.withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -653,84 +790,105 @@ class _ActivityScreenState extends State<ActivityScreen> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.green.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.check_circle,
-              color: Colors.green,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  activity.isRunning ? Icons.play_circle : Icons.pause_circle,
+                  color: statusColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
                   activity.description,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 16,
                     color: Colors.grey.shade900,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.access_time,
-                      size: 14,
-                      color: Colors.grey.shade500,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _formatDuration(activity.duration),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Icon(
-                      Icons.calendar_today,
-                      size: 14,
-                      color: Colors.grey.shade500,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      DateFormat('MMM d, h:mm a').format(activity.createdAt),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade500,
-                      ),
-                    ),
-                  ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Time display
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.timer, color: statusColor, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  _formatDuration(displayDuration),
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade900,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  DateFormat('MMM d, h:mm a').format(activity.startTime),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                 ),
               ],
             ),
           ),
+
+          const SizedBox(height: 12),
+
+          // Action buttons
+          Wrap(spacing: 8, runSpacing: 8, children: actions),
         ],
       ),
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildActionButton(
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onPressed,
+  ) {
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        minimumSize: const Size(0, 32),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(String title, String subtitle, IconData icon) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.history_rounded, size: 64, color: Colors.grey.shade300),
+          Icon(icon, size: 64, color: Colors.grey.shade300),
           const SizedBox(height: 16),
           Text(
-            'No activities completed yet',
+            title,
             style: TextStyle(
               fontSize: 18,
               color: Colors.grey.shade600,
@@ -739,7 +897,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Start tracking your work by adding a description and clicking start',
+            subtitle,
             style: TextStyle(fontSize: 14, color: Colors.grey.shade400),
             textAlign: TextAlign.center,
           ),
@@ -763,17 +921,5 @@ class _ActivityScreenState extends State<ActivityScreen> {
       case ProjectSection.completed:
         return const Color(0xFF6366F1);
     }
-  }
-
-  @override
-  void dispose() {
-    // Save activity state before disposing
-    if (_isRunning && _currentActivity != null) {
-      _updateActivityDuration();
-    }
-    _timer?.cancel();
-    _descriptionController.dispose();
-    _scrollController.dispose();
-    super.dispose();
   }
 }

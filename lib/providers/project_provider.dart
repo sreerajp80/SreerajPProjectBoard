@@ -147,4 +147,20 @@ class ProjectProvider with ChangeNotifier {
     );
     notifyListeners();
   }
+
+  Future<void> updateActivityDescription(
+    String activityId,
+    String newDescription,
+  ) async {
+    final db = await _dbHelper.database;
+
+    await db.update(
+      'activities',
+      {'description': newDescription},
+      where: 'id = ?',
+      whereArgs: [activityId],
+    );
+
+    notifyListeners();
+  }
 }
