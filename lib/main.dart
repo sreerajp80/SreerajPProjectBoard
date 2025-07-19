@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'providers/project_provider.dart';
-import 'screens/modern_home_screen.dart';
+import 'screens/dashboard_screen.dart'; // Changed from modern_home_screen.dart
 
 void main() {
   runApp(const MyApp());
@@ -67,7 +67,7 @@ class MyApp extends StatelessWidget {
           FlutterQuillLocalizations.delegate,
         ],
         supportedLocales: const [Locale('en')],
-        home: const ModernHomeScreen(),
+        home: const DashboardScreen(), // Changed from ModernHomeScreen
       ),
     );
   }

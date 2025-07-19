@@ -3,6 +3,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/project.dart';
+import '../models/activity.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -20,7 +21,12 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2,
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade,
+    );
   }
 
   Future _createDB(Database db, int version) async {
@@ -45,6 +51,21 @@ class DatabaseHelper {
         FOREIGN KEY (projectId) REFERENCES projects (id) ON DELETE CASCADE
       )
     ''');
+
+    // Add to database_helper.dart in _createDB method:
+    await db.execute('''
+  CREATE TABLE activities(
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    description TEXT NOT NULL,
+    startTime INTEGER NOT NULL,
+    endTime INTEGER,
+    duration INTEGER NOT NULL,
+    createdAt INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'finished',
+    FOREIGN KEY (projectId) REFERENCES projects (id) ON DELETE CASCADE
+  )
+''');
   }
 
   Future<Project> createProject(Project project) async {
@@ -199,5 +220,137 @@ class DatabaseHelper {
           row['count'] as int;
     }
     return monthlyData;
+  }
+
+  // Add these methods to DatabaseHelper class:
+  Future<Activity> createActivity(Activity activity) async {
+    final db = await instance.database;
+    await db.insert('activities', activity.toMap());
+    return activity;
+  }
+
+  // Get all activities for a project (including active and paused ones)
+  Future<List<Activity>> getProjectActivities(String projectId) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'activities',
+      where: 'projectId = ?',
+      whereArgs: [projectId],
+      orderBy: 'createdAt DESC',
+    );
+
+    return result.map((map) => Activity.fromMap(map)).toList();
+  }
+
+  Future<int> getTotalProjectDuration(String projectId) async {
+    final db = await instance.database;
+    final result = await db.rawQuery(
+      'SELECT SUM(duration) as total FROM activities WHERE projectId = ?',
+      [projectId],
+    );
+
+    return result.first['total'] as int? ?? 0;
+  }
+
+  // Get the currently active (running) activity for a project
+  Future<Activity?> getActiveActivity(String projectId) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'activities',
+      where: 'projectId = ? AND status = ?',
+      whereArgs: [projectId, 'running'],
+      limit: 1,
+      orderBy: 'createdAt DESC',
+    );
+
+    if (result.isEmpty) return null;
+    return Activity.fromMap(result.first);
+  }
+
+  // Get paused activities for a project
+  Future<List<Activity>> getPausedActivities(String projectId) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'activities',
+      where: 'projectId = ? AND status = ?',
+      whereArgs: [projectId, 'paused'],
+      orderBy: 'createdAt DESC',
+    );
+
+    return result.map((map) => Activity.fromMap(map)).toList();
+  }
+
+  Future<int> updateActivityStatus(
+    String activityId,
+    ActivityStatus status, {
+    int? newDuration,
+    DateTime? endTime,
+  }) async {
+    final db = await instance.database;
+
+    Map<String, dynamic> updates = {'status': status.name};
+
+    if (newDuration != null) {
+      updates['duration'] = newDuration;
+    }
+
+    if (endTime != null) {
+      updates['endTime'] = endTime.millisecondsSinceEpoch;
+    }
+
+    return db.update(
+      'activities',
+      updates,
+      where: 'id = ?',
+      whereArgs: [activityId],
+    );
+  }
+
+  Future<int> updateActivity(Activity activity) async {
+    final db = await instance.database;
+    return db.update(
+      'activities',
+      activity.toMap(),
+      where: 'id = ?',
+      whereArgs: [activity.id],
+    );
+  }
+
+  // Pause all running activities for a project (useful when switching projects)
+  Future<void> pauseAllRunningActivities(String projectId) async {
+    final db = await instance.database;
+    await db.update(
+      'activities',
+      {'status': 'paused'},
+      where: 'projectId = ? AND status = ?',
+      whereArgs: [projectId, 'running'],
+    );
+  }
+
+  // Resume a paused activity
+  Future<void> resumeActivity(String activityId) async {
+    final db = await instance.database;
+    await db.update(
+      'activities',
+      {'status': 'running'},
+      where: 'id = ?',
+      whereArgs: [activityId],
+    );
+  }
+
+  Future<int> deleteActivity(String id) async {
+    final db = await instance.database;
+    return db.delete('activities', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // Add this new method for handling database upgrades
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Add the status column to existing activities table
+      await db.execute('''
+      ALTER TABLE activities
+      ADD COLUMN status TEXT NOT NULL DEFAULT 'finished'
+    ''');
+    }
   }
 }

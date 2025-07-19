@@ -106,9 +106,12 @@ class _ProjectEditorScreenState extends State<ProjectEditorScreen> {
                     border: OutlineInputBorder(),
                   ),
                   items: ProjectSection.values.map((section) {
+                    String sectionName = section.toString().split('.').last;
+                    String capitalizedName =
+                        sectionName[0].toUpperCase() + sectionName.substring(1);
                     return DropdownMenuItem(
                       value: section,
-                      child: Text(section.toString().split('.').last),
+                      child: Text(capitalizedName),
                     );
                   }).toList(),
                   onChanged: (value) {

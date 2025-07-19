@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/project.dart';
 import '../models/project_status_report.dart';
 import '../database/database_helper.dart';
+import '../models/activity.dart';
 
 class ProjectProvider with ChangeNotifier {
   List<Project> _projects = [];
@@ -97,5 +98,53 @@ class ProjectProvider with ChangeNotifier {
     }
 
     return counts;
+  }
+
+  // Add these methods to project_provider.dart:
+
+  Future<void> addActivity(Activity activity) async {
+    await _dbHelper.createActivity(activity);
+    notifyListeners();
+  }
+
+  Future<List<Activity>> getProjectActivities(String projectId) async {
+    return await _dbHelper.getProjectActivities(projectId);
+  }
+
+  Future<int> getTotalProjectDuration(String projectId) async {
+    return await _dbHelper.getTotalProjectDuration(projectId);
+  }
+
+  Future<void> updateActivity(Activity activity) async {
+    await _dbHelper.updateActivity(activity);
+    notifyListeners();
+  }
+
+  Future<void> deleteActivity(String activityId) async {
+    await _dbHelper.deleteActivity(activityId);
+    notifyListeners();
+  }
+
+  Future<Activity?> getActiveActivity(String projectId) async {
+    return await _dbHelper.getActiveActivity(projectId);
+  }
+
+  Future<List<Activity>> getPausedActivities(String projectId) async {
+    return await _dbHelper.getPausedActivities(projectId);
+  }
+
+  Future<void> updateActivityStatus(
+    String activityId,
+    ActivityStatus status, {
+    int? newDuration,
+    DateTime? endTime,
+  }) async {
+    await _dbHelper.updateActivityStatus(
+      activityId,
+      status,
+      newDuration: newDuration,
+      endTime: endTime,
+    );
+    notifyListeners();
   }
 }

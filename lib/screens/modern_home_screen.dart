@@ -34,10 +34,74 @@ class _ModernHomeScreenState extends State<ModernHomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        title: const Text(
+          'Project Board',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back),
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.grey.shade700,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade200),
+            ),
+          ),
+        ),
+        actions: [
+          // Menu buttons in a row with proper spacing
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildHeaderButton(
+                icon: Icons.search,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const SearchScreen(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildHeaderButton(
+                icon: Icons.filter_list,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const FilterScreen(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildHeaderButton(
+                icon: Icons.analytics,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const StatusReportScreen(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 16),
+            ],
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(),
+            _buildSubHeader(),
             Expanded(child: _buildKanbanBoard()),
           ],
         ),
@@ -46,78 +110,16 @@ class _ModernHomeScreenState extends State<ModernHomeScreen> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildSubHeader() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      child: Column(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Sreeraj P Project Board',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey.shade900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Manage your projects efficiently',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Menu buttons in a row with proper spacing
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildHeaderButton(
-                    icon: Icons.search,
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const SearchScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  _buildHeaderButton(
-                    icon: Icons.filter_list,
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const FilterScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  _buildHeaderButton(
-                    icon: Icons.analytics,
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const StatusReportScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ],
+          Expanded(
+            child: Text(
+              'Manage your projects with Kanban view',
+              style: TextStyle(fontSize: 15, color: Colors.grey.shade600),
+            ),
           ),
         ],
       ),

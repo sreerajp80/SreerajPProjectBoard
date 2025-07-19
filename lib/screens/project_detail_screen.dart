@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:sreerajp_project_board/screens/activity_screen.dart';
 import 'dart:convert';
 import '../models/project.dart';
 import '../providers/project_provider.dart';
@@ -112,6 +113,20 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     }
   }
 
+  String _formatTimeDuration(int seconds) {
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${secs}s';
+    } else if (minutes > 0) {
+      return '${minutes}m ${secs}s';
+    } else {
+      return '${secs}s';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final sectionColor = _getSectionColor(widget.project.section);
@@ -146,6 +161,18 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
               if (context.mounted) {
                 Navigator.pop(context);
               }
+            },
+          ),
+          // ADD THIS NEW BUTTON HERE
+          IconButton(
+            icon: Icon(Icons.timer_outlined, color: sectionColor),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ActivityScreen(project: widget.project),
+                ),
+              );
             },
           ),
           IconButton(
@@ -313,6 +340,28 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                   Icons.history_rounded,
                   'Status Changes',
                   '${widget.project.statusHistory.length} total movements',
+                ),
+                // Add Total Time Tracked
+                FutureBuilder<int>(
+                  future: Provider.of<ProjectProvider>(
+                    context,
+                    listen: false,
+                  ).getTotalProjectDuration(widget.project.id),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData) {
+                      return Column(
+                        children: [
+                          const SizedBox(height: 16),
+                          _buildInfoRow(
+                            Icons.timer_outlined,
+                            'Total Time Tracked',
+                            _formatTimeDuration(snapshot.data!),
+                          ),
+                        ],
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
                 ),
               ],
             ),
